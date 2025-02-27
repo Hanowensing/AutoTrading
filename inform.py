@@ -13,19 +13,116 @@ class KiwoomTrader:
         self.kiwoom.OnEventConnect.connect(self.on_login)
         self.app.exec_()
 
+    def get_mock_account(self):
+        """ 모의투자 계좌 가져오기 """
+        accounts = self.kiwoom.dynamicCall("GetLoginInfo(QString)", "ACCNO").split(';')
+        self.account = accounts[0]
+        print(f"🏦 모의투자 계좌번호: {self.account}")
+
     def on_login(self, err_code):
-        """ 로그인 이벤트 처리 """
         if err_code == 0:
             print("✅ 키움증권 모의투자 로그인 성공")
         else:
             print(f"❌ 로그인 실패 (코드: {err_code})")
         self.app.quit()
 
-    def get_mock_account(self):
-        """ 모의투자 계좌 가져오기 """
-        accounts = self.kiwoom.dynamicCall("GetLoginInfo(QString)", "ACCNO").split(';')
-        self.account = accounts[0]
-        print(f"🏦 모의투자 계좌번호: {self.account}")
+    def get_historical_data(self, code, start_date, end_date):
+        """ 과거 일봉 데이터 가져오기 (최소 30일 전 데이터 필요) """
+        self.kiwoom.dynamicCall("SetInputValue(QString,QString)", "종목코드", code)
+        self.kiwoom.dynamicCall("SetInputValue(QString,QString)", "기준일자", end_date)
+        self.kiwoom.dynamicCall("SetInputValue(QString,QString)", "수정주가구분", "1")
+        self.kiwoom.dynamicCall("CommRqData(QString,QString,int,QString)", "주식일봉차트조회", "opt10081", 0, "0101")
+
+        self.kiwoom.OnReceiveTrData.connect(self.on_receive_stock_data)
+        self.data = []
+        self.app.exec_()
+
+        print(f"{code} 종목 데이터 개수: {len(self.data)}")
+        print(self.data[:5])
+
+        if not self.data:
+            print(f"⚠️ {code} 데이터 없음!")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(self.data, columns=['date', 'close'])
+        df['close'] = df['close'].astype(int)
+        df['5MA'] = df['close'].rolling(window=5).mean()
+        df['20MA'] = df['close'].rolling(window=20).mean()
+
+        return df[(df['date'] >= start_date) & (df['date'] <= end_date)]
+
+
+    def run_backtest(self, stock_list, start_date_for_data="20250101", start_date_for_backtest="20250201", end_date="20250225"):
+        """ 백테스트 실행 """
+        print(f"📊 백테스트 실행 시작 ({len(stock_list)}개 종목)")
+        entry_prices = {}  # 매수한 종목 및 들어간 가격 저장
+        profit_log = []    # 각 거래의 수익률 기록
+        backtested_stocks_count = 0  # 데이터가 충분해 실제 백테스트를 진행한 종목 수
+        total_stocks_count = len(stock_list)  # 입력받은 종목 총 개수
+
+        for code in stock_list:
+            try:
+                df = self.get_historical_data(code, start_date_for_data, end_date)
+                print(f"📌 {code} 백테스트 진행 중")
+                if df.empty or len(df) < 20:
+                    print(f"⚠️ {code} 데이터 부족으로 스킵 (총 데이터 개수: {len(df)})")
+                    continue
+                backtested_stocks_count += 1  # 데이터 충분한 종목만 카운트
+
+                # ✅ 백테스트 시작 날짜 이후 데이터만 사용
+                df = df[df['date'] >= start_date_for_backtest]
+
+                for i in range(1, len(df)):
+                    prev_row = df.iloc[i - 1]
+                    last_row = df.iloc[i]
+
+                    # 🔍 NaN 값이 있는 경우 스킵
+                    if pd.isna(prev_row['5MA']) or pd.isna(prev_row['20MA']) or pd.isna(last_row['5MA']) or pd.isna(last_row['20MA']):
+                        continue
+
+                    print(f"🔎 {code} 날짜: {last_row['date']} 5MA: {last_row['5MA']}, 20MA: {last_row['20MA']}")
+
+                    # 골든크로스 발생 시 매수
+                    if prev_row['5MA'] < prev_row['20MA'] and last_row['5MA'] > last_row['20MA']:
+                        entry_prices[code] = last_row['close']
+                        print(f"✅ {last_row['date']} {code} 골든크로스 발생! 매수")
+
+                    if code in entry_prices:
+                        entry_price = entry_prices[code]
+                        profit_rate = (last_row['close'] - entry_price) / entry_price * 100
+
+                        # 목표 수익률 도달 시 매도
+                        if profit_rate >= 10:
+                            print(f"🎯 {last_row['date']} {code} 목표 수익률 {profit_rate:.2f}% 도달! 매도")
+                            profit_log.append(profit_rate)
+                            del entry_prices[code]
+
+                        # 손실 기준 도달 시 손절 매도
+                        elif profit_rate <= -3:
+                            print(f"❌ {last_row['date']} {code} 손실 {profit_rate:.2f}% 발생! 손절 매도")
+                            profit_log.append(profit_rate)
+                            del entry_prices[code]
+
+                        # 데드크로스 발생 시 매도
+                        elif prev_row['5MA'] > prev_row['20MA'] and last_row['5MA'] < last_row['20MA']:
+                            print(f"🚨 {last_row['date']} {code} 데드크로스 발생! 매도")
+                            profit_log.append(profit_rate)
+                            del entry_prices[code]
+
+                print(f"📌 {code} 백테스트 종료, 수익 기록: {profit_log}")
+
+            except Exception as e:
+                print(f"❌ {code} 백테스트 중 오류 발생: {e}")
+                continue
+
+        print("\n📊 백테스트 완료!")
+        print(f"🔍 입력받은 총 종목 수: {total_stocks_count}개")
+        print(f"🔍 데이터가 충분해 백테스트 진행한 종목 수: {backtested_stocks_count}개")
+        print(f"🔍 총 거래 횟수: {len(profit_log)}건")
+        avg_profit = sum(profit_log) / len(profit_log) if profit_log else 0
+        print("평균 수익률:", avg_profit, "%")
+
+
 
     # 🚀 거래량 급등 & 등락률 상위 종목 조회
     def get_filtered_stocks(self):
@@ -151,4 +248,6 @@ class KiwoomTrader:
 
 if __name__ == "__main__":
     trader = KiwoomTrader()
-    trader.run()
+    stock_list = trader.get_filtered_stocks()
+    trader.run_backtest(stock_list, start_date_for_data="20250101", start_date_for_backtest="20250201", end_date="20250225")
+
