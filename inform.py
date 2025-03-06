@@ -173,7 +173,7 @@ class KiwoomTrader:
         self.app.quit()
 
   
-      def check_exit_conditions(self, code, entry_price):
+    def check_exit_conditions(self, code, entry_price):
         """ 매도 조건 체크 """
         current_price = self.get_current_price(code)
         profit_rate = (current_price - entry_price) / entry_price * 100  
