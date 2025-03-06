@@ -51,23 +51,20 @@ class KiwoomTrader:
 
         return df[(df['date'] >= start_date) & (df['date'] <= end_date)]
 
-
     def run_backtest(self, stock_list, start_date_for_data="20250101", start_date_for_backtest="20250201", end_date="20250225"):
         """ 백테스트 실행 """
         print(f"📊 백테스트 실행 시작 ({len(stock_list)}개 종목)")
         entry_prices = {}  # 매수한 종목 및 들어간 가격 저장
-        profit_log = []    # 각 거래의 수익률 기록
-        backtested_stocks_count = 0  # 데이터가 충분해 실제 백테스트를 진행한 종목 수
-        total_stocks_count = len(stock_list)  # 입력받은 종목 총 개수
+        profit_log = []  # 수익률 기록
 
         for code in stock_list:
             try:
                 df = self.get_historical_data(code, start_date_for_data, end_date)
                 print(f"📌 {code} 백테스트 진행 중")
+
                 if df.empty or len(df) < 20:
                     print(f"⚠️ {code} 데이터 부족으로 스킵 (총 데이터 개수: {len(df)})")
                     continue
-                backtested_stocks_count += 1  # 데이터 충분한 종목만 카운트
 
                 # ✅ 백테스트 시작 날짜 이후 데이터만 사용
                 df = df[df['date'] >= start_date_for_backtest]
@@ -82,7 +79,6 @@ class KiwoomTrader:
 
                     print(f"🔎 {code} 날짜: {last_row['date']} 5MA: {last_row['5MA']}, 20MA: {last_row['20MA']}")
 
-                    # 골든크로스 발생 시 매수
                     if prev_row['5MA'] < prev_row['20MA'] and last_row['5MA'] > last_row['20MA']:
                         entry_prices[code] = last_row['close']
                         print(f"✅ {last_row['date']} {code} 골든크로스 발생! 매수")
@@ -91,20 +87,17 @@ class KiwoomTrader:
                         entry_price = entry_prices[code]
                         profit_rate = (last_row['close'] - entry_price) / entry_price * 100
 
-                        # 목표 수익률 도달 시 매도
                         if profit_rate >= 10:
                             print(f"🎯 {last_row['date']} {code} 목표 수익률 {profit_rate:.2f}% 도달! 매도")
                             profit_log.append(profit_rate)
                             del entry_prices[code]
 
-                        # 손실 기준 도달 시 손절 매도
                         elif profit_rate <= -3:
                             print(f"❌ {last_row['date']} {code} 손실 {profit_rate:.2f}% 발생! 손절 매도")
                             profit_log.append(profit_rate)
                             del entry_prices[code]
 
-                        # 데드크로스 발생 시 매도
-                        elif prev_row['5MA'] > prev_row['20MA'] and last_row['5MA'] < last_row['20MA']:
+                        elif prev_row['5MA'] > prev_row['20MA'] and last_row['5MA'] < last_row['20MA']:  # 데드크로스 발생
                             print(f"🚨 {last_row['date']} {code} 데드크로스 발생! 매도")
                             profit_log.append(profit_rate)
                             del entry_prices[code]
@@ -115,14 +108,7 @@ class KiwoomTrader:
                 print(f"❌ {code} 백테스트 중 오류 발생: {e}")
                 continue
 
-        print("\n📊 백테스트 완료!")
-        print(f"🔍 입력받은 총 종목 수: {total_stocks_count}개")
-        print(f"🔍 데이터가 충분해 백테스트 진행한 종목 수: {backtested_stocks_count}개")
-        print(f"🔍 총 거래 횟수: {len(profit_log)}건")
-        avg_profit = sum(profit_log) / len(profit_log) if profit_log else 0
-        print("평균 수익률:", avg_profit, "%")
-
-
+        print("\n📊 백테스트 완료! 평균 수익률:", sum(profit_log) / len(profit_log) if profit_log else 0, "%")
 
     # 🚀 거래량 급등 & 등락률 상위 종목 조회
     def get_filtered_stocks(self):
@@ -186,7 +172,8 @@ class KiwoomTrader:
             self.data.append([date, close])
         self.app.quit()
 
-    def check_exit_conditions(self, code, entry_price):
+  
+      def check_exit_conditions(self, code, entry_price):
         """ 매도 조건 체크 """
         current_price = self.get_current_price(code)
         profit_rate = (current_price - entry_price) / entry_price * 100  
